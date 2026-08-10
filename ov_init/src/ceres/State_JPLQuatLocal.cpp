@@ -25,6 +25,10 @@
 
 using namespace ov_init;
 
+// ===================================================================
+// Plus: identical signature and body for both APIs
+//       (LocalParameterization::Plus  and  Manifold::Plus)
+// ===================================================================
 bool State_JPLQuatLocal::Plus(const double *x, const double *delta, double *x_plus_delta) const {
 
   // Apply the standard JPL update: q <-- [d_th/2; 1] (x) q
@@ -48,9 +52,67 @@ bool State_JPLQuatLocal::Plus(const double *x, const double *delta, double *x_pl
   return true;
 }
 
-bool State_JPLQuatLocal::ComputeJacobian(const double *x, double *jacobian) const {
+#if CERES_VERSION_MAJOR >= 3 || (CERES_VERSION_MAJOR >= 2 && CERES_VERSION_MINOR >= 2)
+// ===================================================================
+// Ceres >= 2.2: Manifold API implementations
+// ===================================================================
+
+bool State_JPLQuatLocal::PlusJacobian(const double *x, double *jacobian) const {
+  // "Trick" Ceres: define dglobal/dlocal = [I_3; 0]
+  // so that Ceres chains dr/dlocal = dr/dglobal * [I_3; 0]
   Eigen::Map<Eigen::Matrix<double, 4, 3, Eigen::RowMajor>> j(jacobian);
   j.topRows<3>().setIdentity();
   j.bottomRows<1>().setZero();
   return true;
 }
+
+bool State_JPLQuatLocal::Minus(const double *y, const double *x, double *y_minus_x) const {
+
+  // Compute the relative rotation: dq = y * x^{-1}
+  Eigen::Map<const Eigen::Vector4d> q_y(y);
+  Eigen::Map<const Eigen::Vector4d> q_x(x);
+
+  // JPL quaternion inverse (conjugate): q^{-1} = [-v; w]
+  Eigen::Vector4d q_x_inv;
+  q_x_inv << -q_x(0), -q_x(1), -q_x(2), q_x(3);
+
+  // dq = y * x^{-1}
+  Eigen::Vector4d dq = ov_core::quat_multiply(q_y, q_x_inv);
+  dq = ov_core::quatnorm(dq);
+
+  // Convert relative quaternion to axis-angle rotation vector
+  Eigen::Map<Eigen::Vector3d> delta(y_minus_x);
+  double w = dq(3);
+  if (w > 1.0) w = 1.0;
+  if (w < -1.0) w = -1.0;
+
+  double theta = 2.0 * std::acos(w);
+  if (theta < 1e-8) {
+    delta = 2.0 * dq.head<3>();
+  } else {
+    delta = theta * dq.head<3>() / std::sin(theta / 2.0);
+  }
+  return true;
+}
+
+bool State_JPLQuatLocal::MinusJacobian(const double *x, double *jacobian) const {
+  // Same trick as PlusJacobian: ddelta/dq = [I_3, 0]
+  Eigen::Map<Eigen::Matrix<double, 3, 4, Eigen::RowMajor>> j(jacobian);
+  j.setIdentity();
+  return true;
+}
+
+#else
+// ===================================================================
+// Ceres < 2.2: LocalParameterization API implementations
+// ===================================================================
+
+bool State_JPLQuatLocal::ComputeJacobian(const double *x, double *jacobian) const {
+  // "Trick" Ceres: define dglobal/dlocal = [I_3; 0]
+  Eigen::Map<Eigen::Matrix<double, 4, 3, Eigen::RowMajor>> j(jacobian);
+  j.topRows<3>().setIdentity();
+  j.bottomRows<1>().setZero();
+  return true;
+}
+
+#endif // CERES_VERSION
