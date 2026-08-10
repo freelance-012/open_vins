@@ -46,6 +46,12 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -fsee -fomit-frame-pointer -fno-sign
 # Enable debug flags (use if you want to debug in gdb)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -Wall -Wuninitialized -Wmaybe-uninitialized -fno-omit-frame-pointer")
 
+# 修复 boost/thread.hpp 在新 glibc (>=2.34) 下 "#if PTHREAD_STACK_MIN > 0" 的编译错误。
+# glibc 的 _DYNAMIC_STACK_SIZE_SOURCE 会把 PTHREAD_STACK_MIN 定义为 __sysconf(...)
+# 函数调用，预处理器无法对函数调用求值。通过 -include 在所有编译单元最早期包含
+# glibc_pthread_fix.h，强制把 PTHREAD_STACK_MIN 定义为数值常量 16384。
+add_compile_options(-include "${CMAKE_CURRENT_SOURCE_DIR}/src/glibc_pthread_fix.h")
+
 # Find our ROS version!
 # NOTE: Default to using the ROS1 package if both are in our enviroment
 # NOTE: https://github.com/romainreignier/share_ros1_ros2_lib_demo
