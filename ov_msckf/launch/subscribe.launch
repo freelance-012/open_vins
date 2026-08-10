@@ -17,7 +17,7 @@
 <!--    <arg name="bag"         default="/datasets/$(arg config)/$(arg dataset).bag" />-->
 
     <!-- saving trajectory path and timing information -->
-    <arg name="dosave"      default="false" />
+    <arg name="dosave"      default="true" />
     <arg name="dotime"      default="false" />
     <arg name="path_est"    default="/tmp/traj_estimate.txt" />
     <arg name="path_time"   default="/tmp/traj_timing.txt" />
