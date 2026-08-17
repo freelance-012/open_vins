@@ -360,6 +360,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
         //         = R_C0toCi * R_ItoC * (p_FinI0 - v_I0inI0 * dt - 0.5 * grav_inI0 * dt^2 - alpha) + p_IinC
         Eigen::MatrixXd H_proj = Eigen::MatrixXd::Zero(2, 3);
         H_proj << 1, 0, -uv_norm(0), 0, 1, -uv_norm(1);
+        //! Equation(29)(30) in https://pgeneva.com/downloads/reports/tr_init.pdf
         Eigen::MatrixXd Y = H_proj * R_ItoC * R_I0toIk;
         Eigen::MatrixXd H_i = Eigen::MatrixXd::Zero(2, system_size);
         Eigen::MatrixXd b_i = Y * alpha_I0toIk - H_proj * p_IinC;
@@ -397,7 +398,9 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
   Eigen::MatrixXd A1A1_inv = (A1.transpose() * A1).llt().solve(Eigen::MatrixXd::Identity(A1.cols(), A1.cols()));
   Eigen::MatrixXd A2 = A.block(0, A.cols() - 3, A.rows(), 3);
   Eigen::MatrixXd Temp = A2.transpose() * (Eigen::MatrixXd::Identity(A1.rows(), A1.rows()) - A1 * A1A1_inv * A1.transpose());
+  //! Equation(36) in https://pgeneva.com/downloads/reports/tr_init.pdf
   Eigen::MatrixXd D = Temp * A2;
+  //! Equation(37) in https://pgeneva.com/downloads/reports/tr_init.pdf
   Eigen::MatrixXd d = Temp * b;
   Eigen::Matrix<double, 7, 1> coeff = InitializerHelper::compute_dongsi_coeff(D, d, params.gravity_mag);
 
@@ -456,6 +459,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
   }
   PRINT_DEBUG("[init-d]: smallest real eigenvalue = %.5f (cost of %f)\n", lambda_min, cost_min);
 
+  //! Equation(43) in https://pgeneva.com/downloads/reports/tr_init.pdf  state_feat_vel and state_grav
   // Recover our gravity from the constraint!
   // Eigen::MatrixXd D_lambdaI_inv = (D - lambda_min * I_dd).inverse();
   Eigen::MatrixXd D_lambdaI_inv = (D - lambda_min * I_dd).llt().solve(I_dd);
@@ -504,6 +508,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
       beta_I0toIk = cpi->beta_tau;
     }
 
+    //! Equation(45) in https://pgeneva.com/downloads/reports/tr_init.pdf
     // Integrate to get the relative to the current timestamp
     Eigen::Vector3d p_IkinI0 = v_I0inI0 * DT - 0.5 * gravity_inI0 * DT * DT + alpha_I0toIk;
     Eigen::Vector3d v_IkinI0 = v_I0inI0 - gravity_inI0 * DT + beta_I0toIk;
@@ -551,17 +556,20 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
   // Convert our states to be a gravity aligned global frame of reference
   // Here we say that the I0 frame is at 0,0,0 and shared the global origin
   Eigen::Matrix3d R_GtoI0;
+  //! Equation(46)-(49) in https://pgeneva.com/downloads/reports/tr_init.pdf
   InitializerHelper::gram_schmidt(gravity_inI0, R_GtoI0);
   Eigen::Vector4d q_GtoI0 = rot_2_quat(R_GtoI0);
   Eigen::Vector3d gravity;
   gravity << 0.0, 0.0, params.gravity_mag;
   std::map<double, Eigen::VectorXd> ori_GtoIi, pos_IiinG, vel_IiinG;
   std::map<size_t, Eigen::Vector3d> features_inG;
+  //! Equation(50) in https://pgeneva.com/downloads/reports/tr_init.pdf
   for (auto const &timepair : map_camera_times) {
     ori_GtoIi[timepair.first] = quat_multiply(ori_I0toIi.at(timepair.first), q_GtoI0);
     pos_IiinG[timepair.first] = R_GtoI0.transpose() * pos_IiinI0.at(timepair.first);
     vel_IiinG[timepair.first] = R_GtoI0.transpose() * vel_IiinI0.at(timepair.first);
   }
+  //! Equation(51) in https://pgeneva.com/downloads/reports/tr_init.pdf
   for (auto const &feat : features_inI0) {
     features_inG[feat.first] = R_GtoI0.transpose() * feat.second;
   }
@@ -574,6 +582,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
   ceres::Problem problem;
 
   // Our system states (map from time to index)
+  //! Equation(52) in https://pgeneva.com/downloads/reports/tr_init.pdf 
   std::map<double, int> map_states;
   std::vector<double *> ceres_vars_ori;
   std::vector<double *> ceres_vars_pos;
@@ -641,6 +650,8 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
     // Get our predicted state at the requested camera timestep
     double timestamp_k1 = timepair.first;
     std::shared_ptr<ov_core::CpiV1> cpi = map_camera_cpi_IitoIi1.at(timestamp_k1);
+
+    //! Equation(53) in https://pgeneva.com/downloads/reports/tr_init.pdf
     Eigen::Matrix<double, 16, 1> state_k1;
     state_k1.block(0, 0, 4, 1) = ori_GtoIi.at(timestamp_k1);
     state_k1.block(4, 0, 3, 1) = pos_IiinG.at(timestamp_k1);
@@ -676,6 +687,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
     problem.AddParameterBlock(var_bias_g, 3);
     problem.AddParameterBlock(var_bias_a, 3);
 
+    //! Equation(70) in https://pgeneva.com/downloads/reports/tr_init.pdf
     // Fix this first ever pose to constrain the problem
     // NOTE: If we don't do this, then the problem won't be full rank
     // NOTE: Since init is over a small window, we are likely to be degenerate
@@ -741,6 +753,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
       factor_params.push_back(ceres_vars_vel.at(map_states.at(timestamp_k1)));
       factor_params.push_back(ceres_vars_bias_a.at(map_states.at(timestamp_k1)));
       factor_params.push_back(ceres_vars_pos.at(map_states.at(timestamp_k1)));
+    //! Equation (91)-(107) in https://ieeexplore.ieee.org/abstract/document/6386235
       auto *factor_imu = new Factor_ImuCPIv1(cpi->DT, gravity, cpi->alpha_tau, cpi->beta_tau, cpi->q_k2tau, cpi->b_a_lin, cpi->b_w_lin,
                                              cpi->J_q, cpi->J_b, cpi->J_a, cpi->H_b, cpi->H_a, cpi->P_meas);
       problem.AddResidualBlock(factor_imu, nullptr, factor_params);
@@ -876,6 +889,7 @@ bool DynamicInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarian
         factor_params.push_back(ceres_vars_calib_cam2imu_ori.at(map_calib_cam2imu.at(cam_id)));
         factor_params.push_back(ceres_vars_calib_cam2imu_pos.at(map_calib_cam2imu.at(cam_id)));
         factor_params.push_back(ceres_vars_calib_cam_intrinsics.at(map_calib_cam.at(cam_id)));
+        //! Equation (65-69) in https://pgeneva.com/downloads/reports/tr_init.pdf
         auto *factor_pinhole = new Factor_ImageReprojCalib(uv_raw, params.sigma_pix, is_fisheye);
         // ceres::LossFunction *loss_function = nullptr;
         ceres::LossFunction *loss_function = new ceres::CauchyLoss(1.0);

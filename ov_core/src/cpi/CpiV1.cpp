@@ -84,10 +84,12 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   //==========================================================================
 
   // Get relative rotation
+  //! Equation(35)
   Eigen::Matrix<double, 3, 3> R_tau2tau1 = small_w ? eye3 - delta_t * w_x + (pow(delta_t, 2) / 2) * w_x_2
                                                    : eye3 - (sin_wt / mag_w) * w_x + ((1.0 - cos_wt) / (pow(mag_w, 2.0))) * w_x_2;
 
   // Updated rotation and its transpose
+  //! Equation(70)
   Eigen::Matrix<double, 3, 3> R_k2tau1 = R_tau2tau1 * R_k2tau;
   Eigen::Matrix<double, 3, 3> R_tau12k = R_k2tau1.transpose();
 
@@ -110,14 +112,17 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   }
 
   // Compute the main part of our analytical means
+  //! part of Equation(37)
   Eigen::Matrix<double, 3, 3> alpha_arg = ((dt_2 / 2.0) * eye3 + f_1 * w_x + f_2 * w_x_2);
   Eigen::Matrix<double, 3, 3> Beta_arg = (delta_t * eye3 + f_3 * w_x + f_4 * w_x_2);
 
   // Matrices that will multiply the a_hat in the update expressions
+  //! part of Equation(37)
   Eigen::MatrixXd H_al = R_tau12k * alpha_arg;
   Eigen::MatrixXd H_be = R_tau12k * Beta_arg;
 
   // Update the measurement means
+  //! Equation(37)
   alpha_tau += beta_tau * delta_t + H_al * a_hat;
   beta_tau += H_be * a_hat;
 
@@ -126,19 +131,23 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   //==========================================================================
 
   // Get right Jacobian
+  //! Equation(164)
   Eigen::Matrix<double, 3, 3> J_r_tau1 =
       small_w ? eye3 - .5 * w_tx + (1.0 / 6.0) * w_tx * w_tx
               : eye3 - ((1 - cos_wt) / (pow((w_dt), 2.0))) * w_tx + ((w_dt - sin_wt) / (pow(w_dt, 3.0))) * w_tx * w_tx;
 
   // Update orientation in respect to gyro bias Jacobians
+  //! Equation(81)
   J_q = R_tau2tau1 * J_q + J_r_tau1 * delta_t;
 
   // Update alpha and beta in respect to accel bias Jacobians
+  //! Equation(49)
   H_a -= H_al;
   H_a += delta_t * H_b;
   H_b -= H_be;
 
   // Derivatives of R_tau12k wrt bias_w entries
+  //! Equation(84)
   Eigen::MatrixXd d_R_bw_1 = -R_tau12k * skew_x(J_q * e_1);
   Eigen::MatrixXd d_R_bw_2 = -R_tau12k * skew_x(J_q * e_2);
   Eigen::MatrixXd d_R_bw_3 = -R_tau12k * skew_x(J_q * e_3);
@@ -161,41 +170,49 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   double df_4_dbw_3;
 
   if (small_w) {
+    //! Equation(57)
     double df_1_dw_mag = -(pow(delta_t, 5) / 15);
     df_1_dbw_1 = w_1 * df_1_dw_mag;
     df_1_dbw_2 = w_2 * df_1_dw_mag;
     df_1_dbw_3 = w_3 * df_1_dw_mag;
 
+    //! Equation(58)
     double df_2_dw_mag = (pow(delta_t, 6) / 72);
     df_2_dbw_1 = w_1 * df_2_dw_mag;
     df_2_dbw_2 = w_2 * df_2_dw_mag;
     df_2_dbw_3 = w_3 * df_2_dw_mag;
 
+    //! Equation(62)
     double df_3_dw_mag = -(pow(delta_t, 4) / 12);
     df_3_dbw_1 = w_1 * df_3_dw_mag;
     df_3_dbw_2 = w_2 * df_3_dw_mag;
     df_3_dbw_3 = w_3 * df_3_dw_mag;
 
+    //! Equation(63)
     double df_4_dw_mag = (pow(delta_t, 5) / 60);
     df_4_dbw_1 = w_1 * df_4_dw_mag;
     df_4_dbw_2 = w_2 * df_4_dw_mag;
     df_4_dbw_3 = w_3 * df_4_dw_mag;
   } else {
+    //! Equation(55)
     double df_1_dw_mag = (pow(w_dt, 2) * sin_wt - 3 * sin_wt + 3 * w_dt * cos_wt) / pow(mag_w, 5);
     df_1_dbw_1 = w_1 * df_1_dw_mag;
     df_1_dbw_2 = w_2 * df_1_dw_mag;
     df_1_dbw_3 = w_3 * df_1_dw_mag;
 
+    //! Equation(56)
     double df_2_dw_mag = (pow(w_dt, 2) - 4 * cos_wt - 4 * w_dt * sin_wt + pow(w_dt, 2) * cos_wt + 4) / (pow(mag_w, 6));
     df_2_dbw_1 = w_1 * df_2_dw_mag;
     df_2_dbw_2 = w_2 * df_2_dw_mag;
     df_2_dbw_3 = w_3 * df_2_dw_mag;
 
+    //! Equation(60)
     double df_3_dw_mag = (2 * (cos_wt - 1) + w_dt * sin_wt) / (pow(mag_w, 4));
     df_3_dbw_1 = w_1 * df_3_dw_mag;
     df_3_dbw_2 = w_2 * df_3_dw_mag;
     df_3_dbw_3 = w_3 * df_3_dw_mag;
 
+    //! Equation(61)
     double df_4_dw_mag = (2 * w_dt + w_dt * cos_wt - 3 * sin_wt) / (pow(mag_w, 5));
     df_4_dbw_1 = w_1 * df_4_dw_mag;
     df_4_dbw_2 = w_2 * df_4_dw_mag;
@@ -203,13 +220,16 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   }
 
   // Update alpha and beta gyro bias Jacobians
+  //! Equation(53)
   J_a += J_b * delta_t;
+  //! Equation(54)
   J_a.block(0, 0, 3, 1) +=
       (d_R_bw_1 * alpha_arg + R_tau12k * (df_1_dbw_1 * w_x - f_1 * e_1x + df_2_dbw_1 * w_x_2 - f_2 * (e_1x * w_x + w_x * e_1x))) * a_hat;
   J_a.block(0, 1, 3, 1) +=
       (d_R_bw_2 * alpha_arg + R_tau12k * (df_1_dbw_2 * w_x - f_1 * e_2x + df_2_dbw_2 * w_x_2 - f_2 * (e_2x * w_x + w_x * e_2x))) * a_hat;
   J_a.block(0, 2, 3, 1) +=
       (d_R_bw_3 * alpha_arg + R_tau12k * (df_1_dbw_3 * w_x - f_1 * e_3x + df_2_dbw_3 * w_x_2 - f_2 * (e_3x * w_x + w_x * e_3x))) * a_hat;
+  //! Equation(59)
   J_b.block(0, 0, 3, 1) +=
       (d_R_bw_1 * Beta_arg + R_tau12k * (df_3_dbw_1 * w_x - f_3 * e_1x + df_4_dbw_1 * w_x_2 - f_4 * (e_1x * w_x + w_x * e_1x))) * a_hat;
   J_b.block(0, 1, 3, 1) +=
@@ -283,6 +303,7 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   // k4-------------------------------------------------------------------------------------------------
 
   // Build state Jacobian
+  //! Equation(42)
   Eigen::Matrix<double, 15, 15> F_k4 = Eigen::Matrix<double, 15, 15>::Zero();
   F_k4.block(0, 0, 3, 3) = -w_x;
   F_k4.block(0, 3, 3, 3) = -eye3;
@@ -291,6 +312,7 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   F_k4.block(12, 6, 3, 3) = eye3;
 
   // Build noise Jacobian
+  //! Equation(42)
   Eigen::Matrix<double, 15, 12> G_k4 = Eigen::Matrix<double, 15, 12>::Zero();
   G_k4.block(0, 0, 3, 3) = -eye3;
   G_k4.block(3, 3, 3, 3) = eye3;

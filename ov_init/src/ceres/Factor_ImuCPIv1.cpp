@@ -155,52 +155,68 @@ bool Factor_ImuCPIv1::Evaluate(double const *const *parameters, double *residual
     Eigen::Matrix<double, 4, 1> q_meas_plus = ov_core::quat_multiply(ov_core::Inv(q_breve), q_b);
 
     // Dtheta wrt theta 1
+    //! the next Equation of (92) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(0, 0, 3, 3) = -((q_1_to_2(3, 0) * eye - ov_core::skew_x(q_1_to_2.block(0, 0, 3, 1))) *
                                        (q_meas_plus(3, 0) * eye + ov_core::skew_x(q_meas_plus.block(0, 0, 3, 1))) -
                                    q_1_to_2.block(0, 0, 3, 1) * q_meas_plus.block(0, 0, 3, 1).transpose());
 
     // Dtheta wrt theta 2
+    //! Equation (92) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(0, 15, 3, 3) = q_res_plus(3, 0) * eye + ov_core::skew_x(q_res_plus.block(0, 0, 3, 1));
 
     // Dtheta wrt bw 1
+    //! Equation (91) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(0, 3, 3, 3) = (q_res_minus(3, 0) * eye - ov_core::skew_x(q_res_minus.block(0, 0, 3, 1))) * J_q;
 
     // Dbw wrt bw1 and bw2
+    //! Equation (93)-(94) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(3, 3, 3, 3) = -eye;
     Jacobian.block(3, 18, 3, 3) = eye;
 
     // Dvelocity wrt theta 1
+    //! Equation (95) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(6, 0, 3, 3) = ov_core::skew_x(R_1 * (v_2 - v_1 + gravity * dt));
 
     // Dvelocity wrt v 1
+    //! Equation (97) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(6, 6, 3, 3) = -R_1;
 
     // Dvelocity wrt v 2
+    //! Equation (98) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(6, 21, 3, 3) = R_1;
 
     // Dvelocity wrt bw 1
+    //! Equation (96) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(6, 3, 3, 3) = -J_b;
 
     // Dvelocity wrt ba 1
+    //! Equation (99) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(6, 9, 3, 3) = -H_b;
 
     // Dbw wrt ba1 and ba2
+    //! Equation (100)-(101) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(9, 9, 3, 3) = -eye;
     Jacobian.block(9, 24, 3, 3) = eye;
 
     // Dposition wrt theta 1
+    //! Equation (102) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(12, 0, 3, 3) = ov_core::skew_x(R_1 * (p_2 - p_1 - v_1 * dt + .5 * gravity * std::pow(dt, 2)));
     // Dposition wrt v 1
+    //! Equation (104) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(12, 6, 3, 3) = -R_1 * dt;
     // Dposition wrt p 1
+    //! Equation (106) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(12, 12, 3, 3) = -R_1;
 
     // Dposition wrt p 2
+    //! Equation (107) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(12, 27, 3, 3) = R_1;
 
     // Dposition wrt bw 1
+    //! Equation (103) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(12, 3, 3, 3) = -J_a;
     // Dposition wrt ba 1
+    //! Equation (105) in https://ieeexplore.ieee.org/abstract/document/6386235
     Jacobian.block(12, 9, 3, 3) = -H_a;
 
     // Apply sqrt info
