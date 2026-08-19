@@ -1,11 +1,11 @@
-# StateHelper 协方差代数 精读报告 (S6)
+# StateHelper 协方差代数 精读报告 (S9)
 
 > **仓库**: open_vins
 > **模块路径**: `ov_msckf/src/state/StateHelper.{h,cpp}`
 > **对应论文**: Mourikis & Roumeliotis 2007 MSCKF [20] (滑窗边缘化/克隆)、Li & Mourikis 2013 IJRR [27] (时间偏移雅可比)、Trawny 2005 [40] (误差态 EKF 协方差更新)、Solà 2017 [47] (Givens QR 初始化)
 > **生成日期**: 2026-08-19
 > **分析者**: Gavin + AI
-> **精读锚点**: §7 S6（Phase 3 函数级路线，阶段 C 状态增广与边缘化）
+> **精读锚点**: §7 S9（Phase 3 函数级路线，阶段 C 状态增广与边缘化）
 
 > 上游：S5（预测+克隆入口）。本篇深入**协方差矩阵本身的所有线性代数操作**——`StateHelper` 是把理论公式翻译成 `Eigen` 块操作的无状态工具集。它不持有状态，只对 `State` 内的 `_Cov` 和 `_variables` 列表做"预测前推 / 卡尔曼更新 / 增广 / 边缘化"。理解本文件，等于掌握了 MSCKF 滑窗滤波器每一帧协方差变形的底层机制。
 
