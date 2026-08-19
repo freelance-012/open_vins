@@ -145,7 +145,7 @@ auto it2=feature_vec.begin();
 while (it2!=feature_vec.end()) {
     UpdaterHelper::UpdaterHelperFeature feat = {...};                    // :173-194 组装特征(含锚定表示)
     Eigen::MatrixXd H_f, H_x; Eigen::VectorXd res; vector<Type> Hx_order;
-    UpdaterHelper::get_feature_jacobian_full(state, feat, H_f, H_x, res, Hx_order); // :203 ★ S14 下沉
+    UpdaterHelper::get_feature_jacobian_full(state, feat, H_f, H_x, res, Hx_order); // :203 ★ 待补充 S13a
     UpdaterHelper::nullspace_project_inplace(H_f, H_x, res);            // :206 ★ 零空间投影
     // χ² 检验 (投影后系统)
     Eigen::MatrixXd P_marg = get_marginal_covariance(state, Hx_order);  // :209
@@ -178,7 +178,7 @@ while (it2!=feature_vec.end()) {
 | $\chi^2=\mathbf{r}^\top\mathbf{S}^{-1}\mathbf{r}$ | `chi2=res.dot(S.llt().solve(res))` | `:212` |
 | 95% 阈值 | `chi_squared_table[res.rows()]` | `:217` |
 
-> **零空间投影（MSCKF 核心 [20]）**：`get_feature_jacobian_full` 返回关于**特征位置**的 $\mathbf{H}_f$（3 列或逆深度维）和关于**状态**的 $\mathbf{H}_x$。`nullspace_project_inplace`（S14 下沉，Givens QR，[47]）把 $\mathbf{H}_f$ 旋成上三角，取左零空间部分——即**消去特征变量、只保留状态约束**。这样特征从不被加入状态，却用多帧约束更新了 clone/标定/内参。
+> **零空间投影（MSCKF 核心 [20]）**：`get_feature_jacobian_full` 返回关于**特征位置**的 $\mathbf{H}_f$（3 列或逆深度维）和关于**状态**的 $\mathbf{H}_x$。`nullspace_project_inplace`（待补充 **S13b**，UpdaterHelper.cpp:426，Givens QR，[47]）把 $\mathbf{H}_f$ 旋成上三角，取左零空间部分——即**消去特征变量、只保留状态约束**。这样特征从不被加入状态，却用多帧约束更新了 clone/标定/内参。
 
 > **χ² 检验**：投影后系统仍可算 Mahalanobis 距离（`:210-212`），超 95% 阈值（可调 `chi2_multipler`）即判该特征异常，删除不更新。预计算 `chi_squared_table`（`:52-55`）避免每次 `quantile` 开销。
 
@@ -207,7 +207,7 @@ StateHelper::EKFUpdate(state, Hx_order_big, Hx_big, res_big, R_big);    // :285 
 | 各向同性 $\mathbf{R}=\sigma_{pix}^2\mathbf{I}$ | `R_big = sigma_pix_sq*I` | `:282` |
 | 卡尔曼更新 | `StateHelper::EKFUpdate(...)` | `:285` |
 
-> **测量压缩（`measurement_compress_inplace`，S14 下沉）**：把所有特征拼成的大系统 $\mathbf{H}\in\mathbb{R}^{M\times N}$（$M\gg N$ 时）用 Givens QR 压缩到 $\min(M,N)$ 行——等价于保留全部信息但减少 `EKFUpdate` 的计算量（避免超大 $M\times M$ 的 $\mathbf{S}$ 矩阵）。压缩后才构造各向同性 $\mathbf{R}$（`:282`），因为压缩改变了残差维度。
+> **测量压缩（`measurement_compress_inplace`，待补充 **S13c**，UpdaterHelper.cpp:456）**：把所有特征拼成的大系统 $\mathbf{H}\in\mathbb{R}^{M\times N}$（$M\gg N$ 时）用 Givens QR 压缩到 $\min(M,N)$ 行——等价于保留全部信息但减少 `EKFUpdate` 的计算量（避免超大 $M\times M$ 的 $\mathbf{S}$ 矩阵）。压缩后才构造各向同性 $\mathbf{R}$（`:282`），因为压缩改变了残差维度。
 
 ---
 
@@ -218,10 +218,10 @@ VioManager (每帧图像)
   └─ UpdaterMSCKF::update(state, feature_vec) @ :58  ★ 本篇
         ├─ FeatureInitializer::single_triangulation[_1d]  (三角化)   → S4 特征表示
         ├─ FeatureInitializer::single_gaussnewton         (GN 精修)
-        ├─ UpdaterHelper::get_feature_jacobian_full       @ :203 → 下沉 S14
-        ├─ UpdaterHelper::nullspace_project_inplace       @ :206 → 下沉 S14 (Givens QR, [47])
+        ├─ UpdaterHelper::get_feature_jacobian_full       @ :203 → 待补充 S13a
+        ├─ UpdaterHelper::nullspace_project_inplace       @ :206 → 待补充 S13b (Givens QR, [47])
         ├─ StateHelper::get_marginal_covariance            (χ² 用, S9 工具)
-        ├─ UpdaterHelper::measurement_compress_inplace    @ :275 → 下沉 S14 (Givens QR)
+        ├─ UpdaterHelper::measurement_compress_inplace    @ :275 → 待补充 S13c (Givens QR)
         └─ StateHelper::EKFUpdate(state, Hx_order_big, Hx_big, res_big, R_big) @ :285 → S9 :116
 ```
 
@@ -279,3 +279,17 @@ VioManager (每帧图像)
 - 选择 **三角化+GN 精修前置** 是因为：投影残差需要精确特征初值；精修后用其雅可比做线性更新，比纯线性化更准（见 S4 特征表示 / [32]）。
 
 > 与 **S14 UpdaterSLAM** 的对比：MSCKF 路径（本篇）把特征完全边缘化掉；SLAM 路径（S14）则把**部分**特征作为持久 Landmark 加入状态（经 S12 `initialize`），用 `feat_rep_msckf`/`ANCHORED_*` 表示区分两类特征的处理。
+
+---
+
+## 待详细补充项（子文档 S13a/S13b/S13c）
+
+> 按 skill "主文档 + 子文档（Sxx + Sxxa/Sxxb）" 规则：本篇（S13 主文档）只覆盖 `UpdaterMSCKF::update` 的**编排逻辑与调用链**。以下内部核心模块暂未展开，列于此处，后续需要细节时补写对应子文档（命名 `S13a_*`/`S13b_*`/`S13c_*`）。
+
+| 子文档 | 内部模块 | 归属文件:行号 | 对应论文 | 内容要点 |
+|--------|---------|--------------|---------|---------|
+| **S13a** | `get_feature_jacobian_full` + `get_feature_jacobian_representation` | `UpdaterHelper.cpp:192` / `:32` | [20][27][32] | 特征投影残差 `res = uv_m - uv_dist`（`:348`）；`H_f`（特征位置雅可比）与 `H_x`（状态雅可比，含 clone/标定/内参/锚定）；`dpfg_dlambda` 链式求导；多种特征表示（GLOBAL/ANCHORED/逆深度/MSCKF 逆深度/单逆深度）的雅可比分支；FEJ 在投影中的使用（`:354-363`） |
+| **S13b** | `nullspace_project_inplace` | `UpdaterHelper.cpp:426` | Solà 2017 [47] (Givens QR, 算法 5.2.4) | 用 Givens 旋转把 `H_f` 旋成上三角，取左零空间块 `H_x = H_x.block(H_f.cols(), ...)`（`:449`）消去特征变量；逐行旋转 `H_x`/`res` 同步变换（`:440-442`） |
+| **S13c** | `measurement_compress_inplace` | `UpdaterHelper.cpp:456` | [47] | 对大系统 `H_x` 用 Givens QR 压缩行数到 `min(M,N)`（`:467-477`），减行不减信息，降低 `EKFUpdate` 的 `S` 矩阵维度 |
+
+> 注：`get_feature_jacobian_full` 实际横跨"特征表示（S4）/ 投影几何 / 链式求导"，展开 S13a 时建议与 S4 的特征表示章节交叉引用。`nullspace_project_inplace` 与 `measurement_compress_inplace` 同源（同一套 Givens QR 旋转逻辑），可在 S13b/S13c 中互相引用。
