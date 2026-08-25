@@ -169,23 +169,33 @@ UpdaterHelper::get_feature_jacobian_full(state, feat, H_f, H_x, res, Hx_order); 
 
 #### 3.4.3 单逆深度的 bearing 零空间投影 (`:190-206`)
 
-```cpp
-if (feat_rep == ANCHORED_INVERSE_DEPTH_SINGLE) {
-    Eigen::MatrixXd H_xf = H_x;
-    H_xf.conservativeResize(H_x.rows(), H_x.cols() + 1);
-    H_xf.block(0, H_x.cols(), H_x.rows(), 1) = H_f.block(0, H_f.cols()-1, H_f.rows(), 1); // 追加 depth 列
-    H_f.conservativeResize(H_f.rows(), H_f.cols() - 1);                                    // 去掉 depth 列
+**数学模型**：对于 `ANCHORED_INVERSE_DEPTH_SINGLE` 表示，特征参数为 $\boldsymbol{\lambda} = [\mathbf{b}^\top, \rho]^\top$（bearing $\mathbf{b} = [\alpha, \beta]^\top$ + 逆深度 $\rho$）。系统为：
 
-    UpdaterHelper::nullspace_project_inplace(H_f, H_xf, res);  // :201 → S13b
-    // 把 bearing 部分投影掉，使特征只剩"深度"一维，且保持估计一致性
+$$\mathbf{r} = \mathbf{H}_x\,\delta\mathbf{x} + \mathbf{H}_f\begin{bmatrix} \delta\mathbf{b} \\ \delta\rho \end{bmatrix} + \mathbf{n} \tag{S15-1}$$
 
-    H_x = H_xf.block(0, 0, H_xf.rows(), H_xf.cols() - 1);  // 拆回状态部分
-    H_f = H_xf.block(0, H_xf.cols() - 1, H_xf.rows(), 1);  // 拆回特征(深度)部分
-}
-```
-- **意图**：单逆深度表示里，bearing（方位）这一维我们并不想当成真值来初始化（会破坏 FEJ 一致性），所以把它**零空间投影掉**，只保留**深度**一维作为待初始化特征参数。
-- 具体操作：先把 `H_f` 的最后一列（depth）并入 `H_xf`，再从 `H_f` 去掉 depth；然后对整个系统做 `nullspace_project_inplace`（Givens QR，S13b），把 bearing 对应行消成零空间；最后拆回 `H_x`（状态）和 `H_f`（只剩 1 列 depth）。
-- 这也是为什么 3.4.1 把表示降级为 `ANCHORED_MSCKF_INVERSE_DEPTH`——最终 Landmark 是一个**单深度**量 (`landmark_size = 1`，见 3.4.4)。
+其中 $\mathbf{H}_f = [\mathbf{H}_{f,b} \;\; \mathbf{h}_{f,\rho}]$，$\mathbf{H}_{f,b} \in \mathbb{R}^{2N\times 2}$（bearing 的 2 列），$\mathbf{h}_{f,\rho} \in \mathbb{R}^{2N\times 1}$（depth 的 1 列）。
+
+**步骤**（对应代码 `:190-206`）：
+
+**(a) 将 depth 列并入状态侧**：构造 $\mathbf{H}_{xf} = [\mathbf{H}_x \;\; \mathbf{h}_{f,\rho}]$，令 $\tilde{\mathbf{H}}_f = \mathbf{H}_{f,b}$（仅 bearing）。方程重写为：
+
+$$\mathbf{r} = \mathbf{H}_{xf}\begin{bmatrix} \delta\mathbf{x} \\ \delta\rho \end{bmatrix} + \tilde{\mathbf{H}}_f\,\delta\mathbf{b} + \mathbf{n} \tag{S15-2}$$
+
+**(b) 对 bearing 做零空间投影**（Givens QR，S13）：对 $\tilde{\mathbf{H}}_f$ 做 QR 分解 $\mathbf{Q}^\top\tilde{\mathbf{H}}_f = [\mathbf{T}_b^\top, \mathbf{0}^\top]^\top$，左乘 $\mathbf{Q}^\top$：
+
+$$\begin{bmatrix} \mathbf{Q}_1^\top\mathbf{r} \\ \mathbf{Q}_2^\top\mathbf{r} \end{bmatrix} = \begin{bmatrix} \mathbf{Q}_1^\top\mathbf{H}_{xf} \\ \mathbf{Q}_2^\top\mathbf{H}_{xf} \end{bmatrix}\begin{bmatrix} \delta\mathbf{x} \\ \delta\rho \end{bmatrix} + \begin{bmatrix} \mathbf{T}_b \\ \mathbf{0} \end{bmatrix}\delta\mathbf{b} + \begin{bmatrix} \mathbf{Q}_1^\top\mathbf{n} \\ \mathbf{Q}_2^\top\mathbf{n} \end{bmatrix} \tag{S15-3}$$
+
+下半部分（$2N-2$ 个方程）中 bearing 误差 $\delta\mathbf{b}$ 被完全消去：
+
+$$\mathbf{Q}_2^\top\mathbf{r} = \mathbf{Q}_2^\top\mathbf{H}_{xf}\begin{bmatrix} \delta\mathbf{x} \\ \delta\rho \end{bmatrix} + \mathbf{Q}_2^\top\mathbf{n} \tag{S15-4}$$
+
+**(c) 拆分回 $H_x$ 和 $H_f$**：投影后的 $\mathbf{Q}_2^\top\mathbf{H}_{xf}$ 拆回状态部分 $\tilde{\mathbf{H}}_x$ 和深度部分 $\tilde{\mathbf{h}}_\rho$。
+
+**为什么需要投影**：三角化得到的 bearing $(\alpha_0, \beta_0)$ 有误差，若直接作为真值初始化，Jacobian 中不包含 bearing 的误差项，滤波器会低估不确定性（过于乐观）。零空间投影将 bearing 的误差"吸收"到投影算子 $\mathbf{Q}_2^\top$ 中，投影后的 Jacobian 隐式地包含了 bearing 不确定性对深度和状态的影响。数学上等价于将 bearing 视为随机变量并边缘化：
+
+$$p(\delta\mathbf{x}, \delta\rho \mid \mathbf{r}) = \int p(\delta\mathbf{x}, \delta\rho, \delta\mathbf{b} \mid \mathbf{r})\,d\delta\mathbf{b} \tag{S15-5}$$
+
+投影后的有效方程数为 $2N-2$（减去 2 个 bearing 维度）。最终 `landmark_size = 1`（只有 depth 进状态）。
 
 ### 3.5 阶段 4（续）：建 Landmark + 调 initialize (`:208-241`)
 

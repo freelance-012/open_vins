@@ -179,9 +179,43 @@ StateHelper::EKFUpdate(state, Hx_order_big, Hx_big, res_big, R_big);           /
 
 ### 3.4 锚点切换 `change_anchors` / `perform_anchor_change`（内部子函数）
 
-#### 推导说明
+#### 理论推导
 
-锚定表示（[32]）把特征位置表示为"相对某个 anchor clone 的位姿"。当该 anchor clone 被边缘化（滑窗收缩）时，若不改锚点，表示将引用已删状态。Genova 2020 [21] 指出需在边缘化前把 Landmark **重锚定**到仍存在的帧，并相应变换其协方差块。`perform_anchor_change` 用雅可比 $\Phi$（旧锚→新锚的误差态变换）调用 `EKFPropagation`（S9）传播协方差。
+**问题定义**（Geneva MSCKF 2.0）：锚定表示把特征位置表示为"相对某个 anchor clone 的位姿"。设旧锚点 $A_{\text{old}}$ 和新锚点 $A_{\text{new}}$ 在全局系中的位姿分别为 $(\mathbf{R}_{G\to A_{\text{old}}}, \mathbf{p}_{A_{\text{old}}}^G)$ 和 $(\mathbf{R}_{G\to A_{\text{new}}}, \mathbf{p}_{A_{\text{new}}}^G)$。
+
+**刚体变换**：旧→新的旋转和平移为：
+
+$$\mathbf{R}_{A_{\text{old}}\to A_{\text{new}}} = \mathbf{R}_{G\to A_{\text{new}}}\mathbf{R}_{G\to A_{\text{old}}}^\top \tag{S14-1}$$
+
+$$\mathbf{p}_{A_{\text{old}}}^{A_{\text{new}}} = \mathbf{R}_{G\to A_{\text{new}}}(\mathbf{p}_{A_{\text{old}}}^G - \mathbf{p}_{A_{\text{new}}}^G) \tag{S14-2}$$
+
+特征在新锚点系中的坐标：
+
+$$\mathbf{p}_F^{A_{\text{new}}} = \mathbf{R}_{A_{\text{old}}\to A_{\text{new}}}\,\mathbf{p}_F^{A_{\text{old}}} + \mathbf{p}_{A_{\text{old}}}^{A_{\text{new}}} \tag{S14-3}$$
+
+**锚点切换 Jacobian** $\boldsymbol{\Phi}$：对 (S14-3) 做一阶展开，设旧锚点系中特征坐标为 $\mathbf{p}_F^{A_{\text{old}}}$，新锚点系中为 $\mathbf{p}_F^{A_{\text{new}}}$：
+
+$$\delta\mathbf{p}_F^{A_{\text{new}}} \approx \mathbf{R}_{A_{\text{old}}\to A_{\text{new}}}\,\delta\mathbf{p}_F^{A_{\text{old}}} + \mathbf{H}_{x,\text{old}}\,\delta\mathbf{x}_{\text{old}} - \mathbf{H}_{x,\text{new}}\,\delta\mathbf{x}_{\text{new}} \tag{S14-4}$$
+
+其中 $\mathbf{H}_{x,\text{old}}$ 和 $\mathbf{H}_{x,\text{new}}$ 分别是 $\mathbf{p}_F^{A_{\text{new}}}$ 对旧/新锚点位姿误差的 Jacobian（$\mathbf{H}_{x,\text{new}}$ 带负号，因为 $\mathbf{p}_{A_{\text{old}}}^{A_{\text{new}}}$ 依赖于新锚点位姿）。
+
+将 $\mathbf{p}_F^{A_{\text{old}}}$ 用特征表示的 Jacobian 展开：$\delta\mathbf{p}_F^{A_{\text{old}}} = \mathbf{H}_{f,\text{old}}\,\delta\boldsymbol{\lambda}_{\text{old}}$。同时新锚点表示下 $\delta\mathbf{p}_F^{A_{\text{new}}} = \mathbf{H}_{f,\text{new}}\,\delta\boldsymbol{\lambda}_{\text{new}}$。联立解出：
+
+$$\delta\boldsymbol{\lambda}_{\text{new}} = \mathbf{H}_{f,\text{new}}^{-1}\left(\mathbf{R}_{A_{\text{old}}\to A_{\text{new}}}\mathbf{H}_{f,\text{old}}\,\delta\boldsymbol{\lambda}_{\text{old}} + \mathbf{H}_{x,\text{old}}\,\delta\mathbf{x}_{\text{old}} - \mathbf{H}_{x,\text{new}}\,\delta\mathbf{x}_{\text{new}}\right) \tag{S14-5}$$
+
+定义锚点切换 Jacobian $\boldsymbol{\Phi}$：
+
+$$\delta\boldsymbol{\lambda}_{\text{new}} = \boldsymbol{\Phi}\begin{bmatrix} \delta\mathbf{x}_{\text{old}} \\ \delta\boldsymbol{\lambda}_{\text{old}} \\ \delta\mathbf{x}_{\text{new}} \end{bmatrix}, \quad \boldsymbol{\Phi} = \mathbf{H}_{f,\text{new}}^{-1}\begin{bmatrix} \mathbf{H}_{x,\text{old}} & \mathbf{R}_{A_{\text{old}}\to A_{\text{new}}}\mathbf{H}_{f,\text{old}} & -\mathbf{H}_{x,\text{new}} \end{bmatrix} \tag{S14-6}$$
+
+**伪逆处理**：
+- `phisize=1`（单逆深度）：$\mathbf{H}_{f,\text{new}}$ 是 $2N\times 1$ 向量，伪逆为 $\mathbf{H}_{f,\text{new}}^+ = \frac{\mathbf{H}_{f,\text{new}}^\top}{\|\mathbf{H}_{f,\text{new}}\|^2}$
+- `phisize=3`（3D 位置）：$\mathbf{H}_{f,\text{new}}$ 是 $2N\times 3$ 矩阵，用列主元 QR 求伪逆
+
+**协方差传播**：锚点切换是确定性变换（$\mathbf{Q}=\mathbf{0}$），复用 `EKFPropagation`（S9）：
+
+$$\mathbf{P}_{\lambda\lambda}' = \boldsymbol{\Phi}\,\mathbf{P}_{\text{old}}\,\boldsymbol{\Phi}^\top \tag{S14-7}$$
+
+**FEJ 一致性**：代码（`:558-572`）同步计算 FEJ 版本的变换。因为锚点切换 Jacobian $\boldsymbol{\Phi}$ 是在当前估计值处线性化的，若后续 EKF 更新使用 FEJ 原则，则锚点切换后的特征坐标也必须用 FEJ 值变换，以保持一致性。
 
 #### 对应代码
 

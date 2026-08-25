@@ -39,7 +39,9 @@ augment_clone (S10 :579)  ← 后续滑窗克隆
 
 ---
 
-## Section 2: 核心数据结构
+## Section 2: 核心数据结构与数学模型
+
+### 2.1 函数签名
 
 ```cpp
 // 文件: ov_msckf/src/state/StateHelper.cpp:36-114
@@ -50,19 +52,86 @@ void StateHelper::EKFPropagation(state,
     const MatrixXd &Q);              // 离散噪声 (来自 S7 Qd_summed)
 ```
 
+### 2.2 数学模型
+
+**问题定义**（Trawny 2005 [40] Eq.103）：误差态 EKF 预测步的协方差更新为
+
+$$\mathbf{P}' = \tilde{\boldsymbol{\Phi}}\,\mathbf{P}\,\tilde{\boldsymbol{\Phi}}^\top + \tilde{\mathbf{Q}}_d \tag{S9-1}$$
+
+其中 $\tilde{\boldsymbol{\Phi}}$ 和 $\tilde{\mathbf{Q}}_d$ 是扩展到 $n\times n$ 的传播矩阵和噪声矩阵（非传播变量对应位置为单位阵和零）。
+
+**分块结构**：将 $\mathbf{P}$ 按"传播变量"（下标 $p$）和"其他变量"（下标 $o$）分块：
+
+$$\mathbf{P} = \begin{bmatrix} \mathbf{P}_{oo} & \mathbf{P}_{op} \\ \mathbf{P}_{po} & \mathbf{P}_{pp} \end{bmatrix} \tag{S9-2}$$
+
+其中 $\mathbf{P}_{pp}$ 是 $m\times m$ 子块（$m$ = 传播变量总误差维度，通常 $m=15$ 对应 IMU）。传播只更新涉及 $p$ 的块：
+
+$$\mathbf{P}_{pp}' = \boldsymbol{\Phi}\,\mathbf{P}_{pp}\,\boldsymbol{\Phi}^\top + \mathbf{Q}_d \tag{S9-3}$$
+
+$$\mathbf{P}_{op}' = \mathbf{P}_{op}\,\boldsymbol{\Phi}^\top \tag{S9-4}$$
+
+$$\mathbf{P}_{po}' = \boldsymbol{\Phi}\,\mathbf{P}_{po} = (\mathbf{P}_{op}')^\top \tag{S9-5}$$
+
+$$\mathbf{P}_{oo}' = \mathbf{P}_{oo} \quad \text{（不变）} \tag{S9-6}$$
+
+其中 $\boldsymbol{\Phi}$ 和 $\mathbf{Q}_d$ 是 $m\times m$ 的局部矩阵（代码中的 `Phi` 和 `Q`）。
+
+**直接计算的代价**：直接构造 $n\times n$ 的 $\tilde{\boldsymbol{\Phi}}$ 并计算 $\tilde{\boldsymbol{\Phi}}\mathbf{P}\tilde{\boldsymbol{\Phi}}^\top$ 的复杂度为 $O(n^3)$。当 $n\approx 200$、$m\approx 15$ 时，绝大部分运算是在与单位阵/零做乘法。
+
+### 2.3 分块计算推导
+
+**核心思路**：定义中间矩阵
+
+$$\mathbf{M} = \mathbf{P}_{\text{all},\,p}\,\boldsymbol{\Phi}^\top \in \mathbb{R}^{n\times m} \tag{S9-7}$$
+
+即取 $\mathbf{P}$ 中传播变量对应的所有行、$m$ 列，右乘 $\boldsymbol{\Phi}^\top$。展开分块：
+
+$$\mathbf{M} = \begin{bmatrix} \mathbf{P}_{op} \\ \mathbf{P}_{pp} \end{bmatrix} \boldsymbol{\Phi}^\top = \begin{bmatrix} \mathbf{P}_{op}\boldsymbol{\Phi}^\top \\ \mathbf{P}_{pp}\boldsymbol{\Phi}^\top \end{bmatrix} = \begin{bmatrix} \mathbf{P}_{op}' \\ \mathbf{P}_{pp}\boldsymbol{\Phi}^\top \end{bmatrix} \tag{S9-8}$$
+
+$\mathbf{M}$ 的上半部分恰好就是更新后的交叉块 $\mathbf{P}_{op}'$（公式 (S9-4)）。再取 $\mathbf{M}$ 的下半部分左乘 $\boldsymbol{\Phi}$：
+
+$$\boldsymbol{\Phi}(\mathbf{P}_{pp}\boldsymbol{\Phi}^\top) + \mathbf{Q}_d = \boldsymbol{\Phi}\mathbf{P}_{pp}\boldsymbol{\Phi}^\top + \mathbf{Q}_d = \mathbf{P}_{pp}' \tag{S9-9}$$
+
+**三步算法**：
+
+**Step 1**：计算 $\mathbf{M} = \mathbf{P}_{\text{all},\,p}\,\boldsymbol{\Phi}^\top$（$n\times m$）。设 `order_OLD` 中有 $K$ 个变量，第 $i$ 个变量的误差维度为 $s_i$（$\sum s_i = m$），在 $\mathbf{P}$ 中的起始列为 $\text{id}_i$，在 $\boldsymbol{\Phi}$ 中的起始列为 $\text{Phi\_id}_i$：
+
+$$\mathbf{M} = \sum_{i=1}^{K} \mathbf{P}_{*,\,\text{id}_i:\,\text{id}_i+s_i} \cdot \boldsymbol{\Phi}_{\text{Phi\_id}_i:\,\text{Phi\_id}_i+s_i,\,*}^\top \tag{S9-10}$$
+
+**Step 2**：计算 $\mathbf{P}_{pp}' = \boldsymbol{\Phi}\,\mathbf{M}_{p} + \mathbf{Q}_d$（$m\times m$）：
+
+$$\mathbf{P}_{pp}' = \mathbf{Q}_d + \sum_{i=1}^{K} \boldsymbol{\Phi}_{*,\,\text{Phi\_id}_i:\,\text{Phi\_id}_i+s_i} \cdot \mathbf{M}_{\text{id}_i:\,\text{id}_i+s_i,\,*} \tag{S9-11}$$
+
+**Step 3**：写回 $\mathbf{P}$。利用对称性 $\mathbf{P}_{po}' = (\mathbf{P}_{op}')^\top = \mathbf{M}^\top$：
+
+$$\mathbf{P}' = \begin{bmatrix} \mathbf{P}_{oo} & \mathbf{M}_{\text{upper}} \\ \mathbf{M}_{\text{upper}}^\top & \mathbf{P}_{pp}' \end{bmatrix} \tag{S9-12}$$
+
 ---
 
 ## Section 3: 理论推导 → 代码逐行对照 ⭐
 
 ### 3.1 协方差前推 $\mathbf{P}'=\Phi\mathbf{P}\Phi^\top+\mathbf{Q}_d$
 
-#### 推导说明
+#### 理论推导
 
-误差态 EKF 预测步（Trawny 2005 [40] Eq.103）：
+误差态 EKF 预测步的协方差更新（Trawny 2005 [40] Eq.103），即公式 (S9-1) 的局部形式：
 
-$$\mathbf{P}' = \Phi\,\mathbf{P}\,\Phi^\top + \mathbf{Q}_d$$
+$$\mathbf{P}' = \boldsymbol{\Phi}\,\mathbf{P}\,\boldsymbol{\Phi}^\top + \mathbf{Q}_d \tag{S9-13}$$
 
-其中 $\Phi$ 来自 S7 累加的 `Phi_summed`，仅作用于 `order_NEW==order_OLD`（IMU 块自身，滑窗 clone 不参与预测）。
+由于 $\boldsymbol{\Phi}$ 只作用于 IMU 相关的 $m$ 个变量（$m \ll n$），直接构造 $n\times n$ 扩展矩阵 $\tilde{\boldsymbol{\Phi}}$ 做全量乘法是 $O(n^3)$ 的浪费。
+
+**分块计算**（Anderson & Moore 1979）：
+
+定义 $\mathbf{M} = \mathbf{P}_{\text{all},\,p}\,\boldsymbol{\Phi}^\top \in \mathbb{R}^{n\times m}$（公式 (S9-7)），则：
+
+- $\mathbf{M}$ 的上半部分（$n-m$ 行）= $\mathbf{P}_{op}\boldsymbol{\Phi}^\top = \mathbf{P}_{op}'$（新交叉块，公式 (S9-4)）
+- $\mathbf{M}$ 的下半部分（$m$ 行）= $\mathbf{P}_{pp}\boldsymbol{\Phi}^\top$，左乘 $\boldsymbol{\Phi}$ 再加 $\mathbf{Q}_d$ 得 $\mathbf{P}_{pp}'$（公式 (S9-3)(S9-9)）
+
+逐变量累加实现（公式 (S9-10)(S9-11)）：设 `order_OLD` 中第 $i$ 个变量的误差维度为 $s_i$，在 $\mathbf{P}$ 中起始列为 $\text{id}_i$，在 $\boldsymbol{\Phi}$ 中起始列为 $\text{Phi\_id}_i$。
+
+**复杂度**：分块算法 $O(n\cdot m^2 + m^3)$ vs 朴素 $O(n^3)$。当 $n=200, m=15$ 时，分块减少约 99% 运算量。
+
+**对称性利用**：$\mathbf{P}_{po}' = (\mathbf{P}_{op}')^\top = \mathbf{M}^\top$，只需计算一次 $\mathbf{M}$。
 
 #### 对应代码
 
@@ -114,12 +183,13 @@ void StateHelper::EKFPropagation(state, order_NEW, order_OLD, Phi, Q) {
 
 #### 对照注释
 
-| 公式项 | 对应代码 | 行号 |
-|--------|---------|------|
-| $\mathbf{P}\Phi^\top$ | `Cov_PhiT += _Cov.block(...)*Phi.block(...).transpose()` | `:83-84` |
-| $\Phi\mathbf{P}\Phi^\top+\mathbf{Q}_d$ | `Phi_Cov_PhiT += Phi*Cov_PhiT.block(...)`（`Phi_Cov_PhiT` 起始于 `Q`） | `:88-91` |
-| 写回中心块 | `_Cov.block(start_id,start_id)=Phi_Cov_PhiT` | `:100` |
-| 写回交叉块 | `_Cov.block(start_id,0)` 与 `_Cov.block(0,start_id)` | `:98-99` |
+| 公式项 | 对应代码 | 行号 | 公式编号 |
+|--------|---------|------|---------|
+| $\mathbf{M} = \mathbf{P}\boldsymbol{\Phi}^\top$（Step 1） | `Cov_PhiT += _Cov.block(...)*Phi.block(...).transpose()` | `:83-84` | (S9-10) |
+| $\mathbf{P}_{pp}' = \boldsymbol{\Phi}\mathbf{M}_p + \mathbf{Q}_d$（Step 2） | `Phi_Cov_PhiT += Phi*Cov_PhiT.block(...)`（起始于 `Q`） | `:88-91` | (S9-11) |
+| 写回 $\mathbf{P}_{op}'$（交叉块） | `_Cov.block(0,start_id)=Cov_PhiT` | `:99` | (S9-4) |
+| 写回 $\mathbf{P}_{po}'$（对称） | `_Cov.block(start_id,0)=Cov_PhiT.transpose()` | `:98` | (S9-5) |
+| 写回 $\mathbf{P}_{pp}'$（对角块） | `_Cov.block(start_id,start_id)=Phi_Cov_PhiT` | `:100` | (S9-3) |
 
 > **设计要点**：因为 `order_NEW == order_OLD`（都是 IMU 块），更新只覆盖协方差中对应 IMU 的**左上连续子块**及其与全局的交叉块。注意它**没有**重建整个 `_Cov`——只重算 IMU 相关行/列，其余变量（clone、SLAM 路标）与 IMU 的交叉协方差通过 `Cov_PhiT` 同步前推（`:98-99` 把 $\mathbf{P}\Phi^\top$ 转置写入，使交叉块也随 $\Phi$ 前推）。
 

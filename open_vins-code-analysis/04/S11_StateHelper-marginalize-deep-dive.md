@@ -55,19 +55,35 @@ void StateHelper::marginalize_slam(state);                                 // :6
 
 ### 3.1 状态边缘化 `marginalize` —— 删除单变量并压缩协方差
 
-#### 推导说明
+#### 理论推导
 
-将变量 $\mathbf{x}_m$ 从 $\mathbf{x}=[\mathbf{x}_1,\mathbf{x}_m,\mathbf{x}_2]$ 中删去，协方差变为（MSCKF 中可观性已通过测量消除，此处只是物理删除）：
+**两种边缘化策略**（Anderson & Moore 1979）：
 
-$$
-\mathbf{P}' =
-\begin{bmatrix}
-\mathbf{P}_{11} & \mathbf{P}_{12} \\
-\mathbf{P}_{21} & \mathbf{P}_{22}
-\end{bmatrix}
-$$
+**(a) Schur 补边缘化**（图优化常用）：设 $\mathbf{x} = [\mathbf{x}_a^\top, \mathbf{x}_b^\top]^\top$，要边缘化 $\mathbf{x}_b$。信息矩阵 $\mathbf{\Lambda} = \mathbf{P}^{-1}$ 分块为：
 
-删 $\mathbf{x}_m$ 后保留 $[\mathbf{x}_1, \mathbf{x}_2]$ 的对应块（代码注释 `:280-289` 图示）。
+$$\mathbf{\Lambda} = \begin{bmatrix} \mathbf{\Lambda}_{aa} & \mathbf{\Lambda}_{ab} \\ \mathbf{\Lambda}_{ba} & \mathbf{\Lambda}_{bb} \end{bmatrix} \tag{S11-1}$$
+
+Schur 补边缘化后，$\mathbf{x}_a$ 的信息矩阵为：
+
+$$\mathbf{\Lambda}_a' = \mathbf{\Lambda}_{aa} - \mathbf{\Lambda}_{ab}\mathbf{\Lambda}_{bb}^{-1}\mathbf{\Lambda}_{ba} \tag{S11-2}$$
+
+特点：保留 $\mathbf{x}_b$ 对 $\mathbf{x}_a$ 的约束，但信息矩阵变稠密（fill-in）。
+
+**(b) 直接删除**（MSCKF 采用）：直接保留 $\mathbf{x}_a$ 对应的协方差子块：
+
+$$\mathbf{P}_a' = \mathbf{P}_{aa} \tag{S11-3}$$
+
+特点：不保留 $\mathbf{x}_b$ 的约束，协方差保持稀疏。
+
+**MSCKF 为什么可以直接删除**：MSCKF 的零空间投影（S13）已将特征观测的约束完全融入 IMU 状态。设 $\mathbf{x} = [\mathbf{x}_{\text{clone}}^\top, \mathbf{x}_{\text{rest}}^\top]^\top$，MSCKF 更新后的协方差为：
+
+$$\mathbf{P}' = \begin{bmatrix} \mathbf{P}_{cc} & \mathbf{P}_{cr} \\ \mathbf{P}_{rc} & \mathbf{P}_{rr} \end{bmatrix} \tag{S11-4}$$
+
+直接删除 $\mathbf{x}_{\text{clone}}$ 后得 $\mathbf{P}_{\text{rest}}' = \mathbf{P}_{rr}$，而 Schur 补结果为 $\mathbf{P}_{\text{rest}}^{\text{Schur}} = \mathbf{P}_{rr} - \mathbf{P}_{rc}\mathbf{P}_{cc}^{-1}\mathbf{P}_{cr}$。差异项 $\mathbf{P}_{rc}\mathbf{P}_{cc}^{-1}\mathbf{P}_{cr}$ 是 $\mathbf{x}_{\text{clone}}$ 对 $\mathbf{x}_{\text{rest}}$ 的"额外约束"——在 MSCKF 中，这部分约束已在零空间投影时被考虑（通过 $\mathbf{Q}_2^\top\mathbf{H}_x$），因此可直接删除（MSCKF 论文 Section III-B）。
+
+**代码中的分块结构**：设被删变量 $\mathbf{x}_m$ 将 $\mathbf{P}$ 分为三区 $\mathbf{x} = [\mathbf{x}_1, \mathbf{x}_m, \mathbf{x}_2]$：
+
+$$\mathbf{P} = \begin{bmatrix} \mathbf{P}_{11} & \mathbf{P}_{1m} & \mathbf{P}_{12} \\ \mathbf{P}_{m1} & \mathbf{P}_{mm} & \mathbf{P}_{m2} \\ \mathbf{P}_{21} & \mathbf{P}_{2m} & \mathbf{P}_{22} \end{bmatrix} \xrightarrow{\text{删除 }\mathbf{x}_m} \mathbf{P}' = \begin{bmatrix} \mathbf{P}_{11} & \mathbf{P}_{12} \\ \mathbf{P}_{21} & \mathbf{P}_{22} \end{bmatrix} \tag{S11-5}$$
 
 #### 对应代码
 

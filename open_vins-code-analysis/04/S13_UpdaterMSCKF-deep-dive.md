@@ -70,7 +70,41 @@ void UpdaterMSCKF::update(state, vector<Feature> &feature_vec);          // :58
 
 ---
 
-## Section 3: 理论推导 → 代码逐行对照 ⭐
+## Section 3: 理论推导 → 代码逐行对照 
+
+### 3.0 数学模型（MSCKF 多帧约束零空间投影）
+
+**问题定义**（Mourikis & Roumeliotis 2007 [20] Section III-B）：设特征 $f$ 在 $N$ 个 clone 时刻被相机 $c$ 观测到，产生 $2N$ 个像素观测 $\{(u_k, v_k)\}_{k=1}^N$。重投影残差为：
+
+$$\mathbf{r}_k = \begin{bmatrix} u_k \\ v_k \end{bmatrix} - \pi(\mathbf{p}_{F_f}^{C_k}) \in \mathbb{R}^2 \tag{S13-1}$$
+
+其中 $\pi(\cdot)$ 是相机投影模型（含畸变），$\mathbf{p}_{F_f}^{C_k} = \mathbf{R}_{I\to C}(\mathbf{R}_{G\to I_k}(\mathbf{p}_{F_f}^G - \mathbf{p}_{I_k}^G)) + \mathbf{p}_I^C$。线性化后：
+
+$$\mathbf{r}_k \approx \mathbf{H}_{x,k}\,\delta\mathbf{x} + \mathbf{H}_{f,k}\,\delta\mathbf{x}_f + \mathbf{n}_k, \quad \mathbf{n}_k \sim \mathcal{N}(\mathbf{0},\, \sigma_{\text{pix}}^2\mathbf{I}_2) \tag{S13-2}$$
+
+堆叠 $N$ 个观测：$\mathbf{r} = \mathbf{H}_x\,\delta\mathbf{x} + \mathbf{H}_f\,\delta\mathbf{x}_f + \mathbf{n}$，其中 $\mathbf{H}_x \in \mathbb{R}^{2N\times m}$，$\mathbf{H}_f \in \mathbb{R}^{2N\times p}$（$p=3$ 对于 3D 位置，$p=1$ 对于单逆深度）。
+
+**零空间投影**（Givens QR，Golub & Van Loan [48] Algorithm 5.2.4）：对 $\mathbf{H}_f$ 做 QR 分解 $\mathbf{Q}^\top\mathbf{H}_f = [\mathbf{T}^\top, \mathbf{0}^\top]^\top$，将 $\mathbf{Q} = [\mathbf{Q}_1 \;\; \mathbf{Q}_2]$ 左乘测量方程：
+
+$$\begin{bmatrix} \mathbf{Q}_1^\top\mathbf{r} \\ \mathbf{Q}_2^\top\mathbf{r} \end{bmatrix} = \begin{bmatrix} \mathbf{Q}_1^\top\mathbf{H}_x \\ \mathbf{Q}_2^\top\mathbf{H}_x \end{bmatrix}\delta\mathbf{x} + \begin{bmatrix} \mathbf{T} \\ \mathbf{0} \end{bmatrix}\delta\mathbf{x}_f + \begin{bmatrix} \mathbf{Q}_1^\top\mathbf{n} \\ \mathbf{Q}_2^\top\mathbf{n} \end{bmatrix} \tag{S13-3}$$
+
+下半部分（$2N-p$ 个方程）中 $\delta\mathbf{x}_f$ 被完全消去：
+
+$$\tilde{\mathbf{r}}_2 = \tilde{\mathbf{H}}_{x2}\,\delta\mathbf{x} + \tilde{\mathbf{n}}_2, \quad \tilde{\mathbf{n}}_2 \sim \mathcal{N}(\mathbf{0},\, \sigma_{\text{pix}}^2\mathbf{I}_{2N-p}) \tag{S13-4}$$
+
+由于 $\mathbf{R} = \sigma_{\text{pix}}^2\mathbf{I}_{2N}$，正交变换保持噪声统计性质：$\mathbb{E}[\tilde{\mathbf{n}}_i\tilde{\mathbf{n}}_j^\top] = \sigma_{\text{pix}}^2\delta_{ij}\mathbf{I}$。
+
+**从最小二乘角度理解**：正交变换 $\mathbf{Q}^\top$ 不改变 2-范数，原始问题分解为两项：
+
+$$\|\mathbf{r} - \mathbf{H}_x\delta\mathbf{x} - \mathbf{H}_f\delta\mathbf{x}_f\|^2 = \underbrace{\|\tilde{\mathbf{r}}_1 - \tilde{\mathbf{H}}_{x1}\delta\mathbf{x} - \mathbf{T}\delta\mathbf{x}_f\|^2}_{\text{被 }\delta\mathbf{x}_f\text{ 吸收}} + \underbrace{\|\tilde{\mathbf{r}}_2 - \tilde{\mathbf{H}}_{x2}\delta\mathbf{x}\|^2}_{\text{状态的真正约束}} \tag{S13-5}$$
+
+前 $p$ 个自由度被 $\delta\mathbf{x}_f$ 吸收（$\mathbf{T}$ 可逆），后 $2N-p$ 个自由度才是关于 $\delta\mathbf{x}$ 的独立约束。
+
+**测量压缩**：多个特征的 Jacobian 堆叠后，用 Givens QR 将方程数压缩到 $\min(M, n_{\text{state}})$：
+
+$$\mathbf{Q}^\top\mathbf{H}_x = \begin{bmatrix} \mathbf{R} \\ \mathbf{0} \end{bmatrix}, \quad \mathbf{Q}^\top\mathbf{r} = \begin{bmatrix} \mathbf{r}' \\ * \end{bmatrix} \tag{S13-6}$$
+
+---
 
 ### 3.1 特征清洗与滑窗位姿构造
 

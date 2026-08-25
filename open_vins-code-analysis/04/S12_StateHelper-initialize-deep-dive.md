@@ -57,13 +57,48 @@ void StateHelper::initialize_invertible(state, new_var, H_order, H_R, H_L, R, re
 
 ### 3.1 初始化主流程 `initialize`（Givens QR + χ²）
 
-#### 推导说明
+#### 理论推导
 
-SLAM 路标首次被观测到时需加入状态。为避免可观性缺失，用 **Givens 旋转将测量系统 QR 分解**（Solà 2017 [47] / MSCKF-SLAM [32]）：把含新变量的行旋到左上，分离成
-- **可逆初始化系统** $\mathbf{H}_f \delta\mathbf{x}_f = \mathbf{H}_L \delta\mathbf{x}_L + \mathbf{r}_L$（直接求新变量）
-- **零空间投影更新系统** $\mathbf{H}_{up}\delta\mathbf{x}_{old}=\mathbf{r}_{up}$（投影到旧变量更新）
+**问题定义**（OpenVINS 论文 Eq.18-22）：设系统当前状态误差为 $\delta\mathbf{x} \in \mathbb{R}^m$，新变量误差为 $\delta\mathbf{x}_f \in \mathbb{R}^p$（$p$ 为新变量误差维度，如 3D 路标 $p=3$，单逆深度 $p=1$）。测量残差 $\mathbf{r} \in \mathbb{R}^k$ 的线性化模型为：
 
-先做 Mahalanobis $\chi^2$ 检验（异常则拒绝初始化），再分别处理两部分。
+$$\mathbf{r} = \mathbf{H}_R\,\delta\mathbf{x} + \mathbf{H}_L\,\delta\mathbf{x}_f + \mathbf{n}, \quad \mathbf{n} \sim \mathcal{N}(\mathbf{0},\, \mathbf{R}) \tag{S12-1}$$
+
+其中 $\mathbf{H}_R \in \mathbb{R}^{k \times m}$ 为旧变量 Jacobian，$\mathbf{H}_L \in \mathbb{R}^{k \times p}$ 为新变量 Jacobian，$\mathbf{R} = \sigma^2 \mathbf{I}_k$ 为各向同性噪声。
+
+**Givens QR 分离**（Solà 2017 [47] / MSCKF-SLAM [32]）：对 $\mathbf{H}_L$ 做 QR 分解：
+
+$$\mathbf{Q}^\top \mathbf{H}_L = \begin{bmatrix} \mathbf{T} \\ \mathbf{0} \end{bmatrix} \tag{S12-2}$$
+
+其中 $\mathbf{T} \in \mathbb{R}^{p \times p}$ 上三角（满秩），$\mathbf{Q} = [\mathbf{Q}_1 \;\; \mathbf{Q}_2]$，$\mathbf{Q}_1 \in \mathbb{R}^{k \times p}$，$\mathbf{Q}_2 \in \mathbb{R}^{k \times (k-p)}$。将 $\mathbf{Q}^\top$ 左乘方程 (18)：
+
+$$\begin{bmatrix} \mathbf{Q}_1^\top\mathbf{r} \\ \mathbf{Q}_2^\top\mathbf{r} \end{bmatrix} = \begin{bmatrix} \mathbf{Q}_1^\top\mathbf{H}_R \\ \mathbf{Q}_2^\top\mathbf{H}_R \end{bmatrix}\delta\mathbf{x} + \begin{bmatrix} \mathbf{T} \\ \mathbf{0} \end{bmatrix}\delta\mathbf{x}_f + \begin{bmatrix} \mathbf{Q}_1^\top\mathbf{n} \\ \mathbf{Q}_2^\top\mathbf{n} \end{bmatrix} \tag{S12-3}$$
+
+分离为两个子系统：
+
+- **可逆初始化系统**（$p$ 个方程）：$\mathbf{Q}_1^\top\mathbf{r} = \mathbf{Q}_1^\top\mathbf{H}_R\,\delta\mathbf{x} + \mathbf{T}\,\delta\mathbf{x}_f + \mathbf{Q}_1^\top\mathbf{n}$
+- **零空间投影更新系统**（$k-p$ 个方程）：$\mathbf{Q}_2^\top\mathbf{r} = \mathbf{Q}_2^\top\mathbf{H}_R\,\delta\mathbf{x} + \mathbf{Q}_2^\top\mathbf{n}$
+
+由于 $\mathbf{R} = \sigma^2\mathbf{I}$，正交变换保持噪声统计性质：$\mathbb{E}[\mathbf{Q}_i^\top\mathbf{n}\mathbf{n}^\top\mathbf{Q}_j] = \sigma^2\delta_{ij}\mathbf{I}$。
+
+**χ² 检验**（对投影系统）：
+
+$$\chi^2 = \mathbf{r}_{up}^\top \mathbf{S}^{-1} \mathbf{r}_{up} \sim \chi^2_{k-p}, \quad \mathbf{S} = \mathbf{H}_{up}\mathbf{P}_{\text{small}}\mathbf{H}_{up}^\top + \mathbf{R}_{up} \tag{S12-4}$$
+
+**可逆初始化** `initialize_invertible`：从可逆系统解出新变量：
+
+$$\delta\mathbf{x}_f = \mathbf{T}^{-1}(\mathbf{r}_1 - \mathbf{H}_{x1}\,\delta\mathbf{x}) \approx \mathbf{T}^{-1}\mathbf{r}_1 \tag{S12-5}$$
+
+（三角化前已通过条件 Gauss-Newton 求解过初值，$\mathbf{r}_1$ 中已扣除 $\mathbf{H}_{x1}\delta\mathbf{x}$ 的贡献。）
+
+**新变量协方差**：等效测量噪声为 $\mathbf{H}_{x1}\delta\mathbf{x} + \mathbf{n}_1$，其协方差 $\mathbf{M} = \mathbf{H}_{x1}\mathbf{P}_{\text{small}}\mathbf{H}_{x1}^\top + \mathbf{R}_1$。由误差传播：
+
+$$\mathbf{P}_{ff} = \mathbf{T}^{-1}\mathbf{M}\mathbf{T}^{-\top} \tag{S12-6}$$
+
+**交叉协方差**：定义 $\mathbf{M}_a = \mathbf{P}\mathbf{H}_R^\top \in \mathbb{R}^{n \times p}$（全状态对 $\mathbf{H}_R\delta\mathbf{x}$ 的交叉协方差），则：
+
+$$\mathbf{P}_{\text{all},f} = -\mathbf{M}_a\mathbf{T}^{-\top} \tag{S12-7}$$
+
+负号来源于 $\delta\mathbf{x}_f$ 对 $\delta\mathbf{x}$ 的负依赖（$\mathbf{r}_1$ 固定时，$\delta\mathbf{x}$ 增大则 $\delta\mathbf{x}_f$ 减小）。
 
 #### 对应代码
 
@@ -107,11 +142,18 @@ bool StateHelper::initialize(state, new_variable, H_order, H_R, H_L, R, res, chi
 
 #### 对照注释
 
-| 公式项 | 对应代码 | 行号 |
-|--------|---------|------|
-| Givens QR 分离 | `G.makeGivens(...); applyOnTheLeft(...)` | `:430-439` |
-| $\chi^2=\mathbf{r}_{up}^\top\mathbf{S}^{-1}\mathbf{r}_{up}$ | `chi2=resup.dot(S.llt().solve(resup))` | `:463` |
-| 95% 阈值 | `quantile(chi_squared(res.rows()),0.95)` | `:466-467` |
+| 公式项 | 对应代码 | 行号 | 公式编号 |
+|--------|---------|------|---------|
+| 测量模型 | `H_R, H_L, R, res` | `:393-395` | (18) |
+| Givens QR 分离 | `G.makeGivens(...); applyOnTheLeft(...)` | `:430-439` | (19) |
+| 分离为初始化/投影系统 | `Hxinit/H_finit/resinit` 与 `Hup/resup/Rup` | `:445-453` | (20) |
+| $\mathbf{M} = \mathbf{P}\mathbf{H}_R^\top$ | `M_a.block(var.id,0,...) = M_i` | `:519-541` | (24) |
+| $\mathbf{M} = \mathbf{H}_R\mathbf{P}_{\text{small}}\mathbf{H}_R^\top + \mathbf{R}$ | `M = H_R*P_small*H_R^T + R` | `:549-551` | (23) 的 $\mathbf{M}$ |
+| $\mathbf{P}_{ff} = \mathbf{H}_L^{-1}\mathbf{M}\mathbf{H}_L^{-\top}$ | `P_LL = H_Linv*M*H_Linv^T` | `:557` | (23) |
+| 交叉块 $\mathbf{P}_{iL} = -\mathbf{M}_a\mathbf{H}_L^{-\top}$ | `_Cov.block(0,oldSize) = -M_a*H_Linv^T` | `:562` | (24) |
+| $\delta\mathbf{x}_f = \mathbf{H}_L^{-1}\mathbf{r}$ | `new_variable->update(H_Linv * res)` | `:568` | (22) |
+| $\chi^2 = \mathbf{r}_{up}^\top\mathbf{S}^{-1}\mathbf{r}_{up}$ | `chi2 = resup.dot(S.llt().solve(resup))` | `:463` | (21) |
+| 95% 阈值 | `quantile(chi_squared(res.rows()), 0.95)` | `:466-467` | — |
 
 ### 3.2 可逆初始化 `initialize_invertible`
 
